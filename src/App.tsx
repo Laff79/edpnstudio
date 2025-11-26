@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Trash2, Guitar, Drum, Music2, Headphones, Activity, User, 
   Clock, FileText, Coffee, Share2, AlignLeft, Sparkles, X, Power,
-  ChevronDown, ChevronUp, Wifi, WifiOff, Mic2, Ban
+  ChevronDown, ChevronUp, Wifi, WifiOff, Mic2
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -136,7 +136,7 @@ export default function StudioTracker() {
 
   // 1. AUTHENTICATION
   useEffect(() => {
-    signInAnonymously(auth).catch((error) => {
+    signInAnonymously(auth).catch((error: any) => {
       console.error("Auth failed:", error);
     });
     
@@ -149,15 +149,15 @@ export default function StudioTracker() {
     if (!user) return;
     const songsQuery = collection(db, 'artifacts', appId, 'public', 'data', 'songs');
     
-    const unsubscribe = onSnapshot(songsQuery, (snapshot) => {
-      const loadedSongs: Song[] = snapshot.docs.map(doc => ({
+    const unsubscribe = onSnapshot(songsQuery, (snapshot: any) => {
+      const loadedSongs: Song[] = snapshot.docs.map((doc: any) => ({
         id: doc.id,
         ...doc.data()
       } as Song));
       
       loadedSongs.sort((a, b) => a.title.localeCompare(b.title));
       setSongs(loadedSongs);
-    }, (error) => {
+    }, (error: any) => {
       console.error("Sync error songs:", error);
     });
 
@@ -169,13 +169,13 @@ export default function StudioTracker() {
     if (!user) return;
     const consumRef = doc(db, 'artifacts', appId, 'public', 'data', 'consumption', 'global_stats');
     
-    const unsubscribe = onSnapshot(consumRef, (docSnap) => {
+    const unsubscribe = onSnapshot(consumRef, (docSnap: any) => {
       if (docSnap.exists()) {
         setConsumption(docSnap.data() as Consumption);
       } else {
         setDoc(consumRef, { coffee: 0, snus: 0 });
       }
-    }, (error) => {
+    }, (error: any) => {
       console.error("Sync error consumption:", error);
     });
 
