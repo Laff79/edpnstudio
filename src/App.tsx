@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Trash2, Guitar, Drum, Music2, Headphones, Activity, User, 
   Clock, FileText, Coffee, Share2, AlignLeft, Sparkles, X, Power,
-  ChevronDown, ChevronUp, Wifi, WifiOff
+  ChevronDown, ChevronUp, Wifi, WifiOff, Mic2, Ban
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -13,7 +13,6 @@ import {
 } from 'firebase/firestore';
 
 // --- FIREBASE SETUP ---
-// Nå er dine ekte nøkler lagt inn her:
 const firebaseConfig = {
   apiKey: "AIzaSyCl2o4FtwSfqgoEZiVMQC-VW8cxLw5JVxM",
   authDomain: "edpnstudio.firebaseapp.com",
@@ -28,21 +27,13 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Vi bruker en fast ID for produksjon slik at alle ser samme data
 const appId = "edpn-production"; 
 
 // --- TYPES ---
-type Status = 'todo' | 'recording' | 'done' | 'mix_v1' | 'mix_v2' | 'master';
+// La til 'skipped' status
+type Status = 'todo' | 'recording' | 'done' | 'skipped' | 'mix_v1' | 'mix_v2' | 'master';
 
 interface SongParts {
-  drums: Status;
-  bass: Status;
-  guitars: Status;
-  keys: Status;
-  lars_vocals: Status;
-  laff_vocals: Status;
-  torbjorn_vocals: Status;
-  mixing: Status;
   [key: string]: Status;
 }
 
@@ -63,25 +54,30 @@ interface Consumption {
 }
 
 // --- CONSTANTS ---
+// Oppdatert liste med instrumenter
 const TRACKS = [
-  { key: 'drums', label: 'Drums', icon: Drum },
+  { key: 'drums', label: 'Trommer', icon: Drum },
   { key: 'bass', label: 'Bass', icon: Activity },
-  { key: 'guitars', label: 'Gtr', icon: Guitar },
+  { key: 'torbjorn_akustisk', label: 'Tor Ak.', icon: Guitar },
+  { key: 'laff_akustisk', label: 'Laff Ak.', icon: Guitar },
+  { key: 'laff_elektrisk', label: 'Laff El.', icon: Guitar },
   { key: 'keys', label: 'Keys', icon: Music2 },
-  { key: 'lars_vocals', label: 'Lars', icon: User },
-  { key: 'laff_vocals', label: 'Laff', icon: User },
-  { key: 'torbjorn_vocals', label: 'Tor', icon: User },
+  { key: 'lars_kor', label: 'Lars Kor', icon: Mic2 },
+  { key: 'laff_kor', label: 'Laff Kor', icon: Mic2 },
+  { key: 'torbjorn_vokal', label: 'Tor Vok', icon: User },
   { key: 'mixing', label: 'Mix', icon: Headphones },
 ];
 
 const DEFAULT_PARTS: SongParts = {
   drums: 'todo',
   bass: 'todo',
-  guitars: 'todo',
+  torbjorn_akustisk: 'todo',
+  laff_akustisk: 'todo',
+  laff_elektrisk: 'todo',
   keys: 'todo',
-  lars_vocals: 'todo',
-  laff_vocals: 'todo',
-  torbjorn_vocals: 'todo',
+  lars_kor: 'todo',
+  laff_kor: 'todo',
+  torbjorn_vokal: 'todo',
   mixing: 'todo',
 };
 
@@ -109,6 +105,7 @@ const DigitalDisplay = ({ value, onChange, placeholder, isCollapsed }: { value: 
 const LedLight = ({ status }: { status: Status }) => {
   let colorClass = 'bg-slate-800';
   let shadowClass = '';
+  
   if (status === 'done' || status === 'master') {
     colorClass = 'bg-cyan-400'; shadowClass = 'shadow-[0_0_8px_rgba(34,211,238,0.8)]';
   } else if (status === 'recording') {
@@ -117,7 +114,10 @@ const LedLight = ({ status }: { status: Status }) => {
     colorClass = 'bg-yellow-400'; shadowClass = 'shadow-[0_0_8px_rgba(250,204,21,0.6)]';
   } else if (status === 'mix_v2') {
     colorClass = 'bg-orange-500'; shadowClass = 'shadow-[0_0_8px_rgba(249,115,22,0.6)]';
+  } else if (status === 'skipped') {
+    return <div className="w-1.5 h-1.5 rounded-full bg-black border border-slate-700"></div>;
   }
+
   return <div className={`w-1.5 h-1.5 rounded-full ${colorClass} ${shadowClass} transition-all duration-300`}></div>;
 };
 
@@ -136,8 +136,7 @@ export default function StudioTracker() {
 
   // 1. AUTHENTICATION
   useEffect(() => {
-    // Vi logger inn anonymt direkte siden vi bruker din egen produksjons-database
-    signInAnonymously(auth).catch((error: any) => {
+    signInAnonymously(auth).catch((error) => {
       console.error("Auth failed:", error);
     });
     
@@ -148,20 +147,17 @@ export default function StudioTracker() {
   // 2. DATA SYNC - SONGS
   useEffect(() => {
     if (!user) return;
-    // Rule 1: Correct Path
     const songsQuery = collection(db, 'artifacts', appId, 'public', 'data', 'songs');
     
-    // Rule 2: Simple Query
-    const unsubscribe = onSnapshot(songsQuery, (snapshot: any) => {
-      const loadedSongs: Song[] = snapshot.docs.map((doc: any) => ({
+    const unsubscribe = onSnapshot(songsQuery, (snapshot) => {
+      const loadedSongs: Song[] = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       } as Song));
       
-      // Client-side sort (Rule 2 compliancy)
       loadedSongs.sort((a, b) => a.title.localeCompare(b.title));
       setSongs(loadedSongs);
-    }, (error: any) => {
+    }, (error) => {
       console.error("Sync error songs:", error);
     });
 
@@ -173,27 +169,25 @@ export default function StudioTracker() {
     if (!user) return;
     const consumRef = doc(db, 'artifacts', appId, 'public', 'data', 'consumption', 'global_stats');
     
-    const unsubscribe = onSnapshot(consumRef, (docSnap: any) => {
+    const unsubscribe = onSnapshot(consumRef, (docSnap) => {
       if (docSnap.exists()) {
         setConsumption(docSnap.data() as Consumption);
       } else {
-        // Create default if missing
         setDoc(consumRef, { coffee: 0, snus: 0 });
       }
-    }, (error: any) => {
+    }, (error) => {
       console.error("Sync error consumption:", error);
     });
 
     return () => unsubscribe();
   }, [user]);
 
-  // Timer Effect
   useEffect(() => {
     const timer = setInterval(() => setSessionTime(t => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // --- ACTIONS (FIRESTORE) ---
+  // --- ACTIONS ---
 
   const addSong = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -251,7 +245,6 @@ export default function StudioTracker() {
     } catch (e) { console.error("Consumption error:", e); }
   };
 
-  // Logic
   const cycleStatus = (song: Song, part: string) => {
     const current = song.parts[part] || 'todo';
     let next: Status = 'todo';
@@ -265,6 +258,8 @@ export default function StudioTracker() {
     } else {
       if (current === 'todo') next = 'recording';
       else if (current === 'recording') next = 'done';
+      else if (current === 'done') next = 'skipped'; // Lagt til "Ikke i bruk"
+      else if (current === 'skipped') next = 'todo';
       else next = 'todo';
     }
 
@@ -288,9 +283,12 @@ export default function StudioTracker() {
     let report = `🎚️ DELTA STUDIO STATUS\n`;
     report += `Status: ${totalProgress}% | Kaffe: ${consumption.coffee} | Snus: ${consumption.snus}\n`;
     songs.forEach(song => {
-      const partsDone = Object.values(song.parts).filter(s => s === 'done' || s === 'master').length;
-      const totalParts = Object.values(song.parts).length;
-      report += `${partsDone === totalParts ? '✅' : '🚧'} ${song.title}\n`;
+      // Filtrerer bort 'skipped' fra tellingen
+      const activeParts = Object.values(song.parts).filter(s => s !== 'skipped');
+      const partsDone = activeParts.filter(s => s === 'done' || s === 'master').length;
+      const isComplete = partsDone === activeParts.length && activeParts.length > 0;
+      
+      report += `${isComplete ? '✅' : '🚧'} ${song.title}\n`;
     });
     navigator.clipboard.writeText(report);
     setCopyFeedback(true);
@@ -299,19 +297,30 @@ export default function StudioTracker() {
 
   const calculateProgress = () => {
     if (songs.length === 0) return 0;
-    const totalParts = songs.length * TRACKS.length;
-    let completed = 0;
+    
+    let totalActiveParts = 0;
+    let totalCompletedValue = 0;
+
     songs.forEach(song => {
-      Object.values(song.parts).forEach(s => {
-        if (s === 'done' || s === 'master') completed += 1;
-        if (s === 'recording' || s === 'mix_v1') completed += 0.5;
-        if (s === 'mix_v2') completed += 0.8;
+      TRACKS.forEach(track => {
+        const status = song.parts[track.key] || 'todo';
+        
+        if (status !== 'skipped') {
+          totalActiveParts += 1;
+          
+          if (status === 'done' || status === 'master') totalCompletedValue += 1;
+          else if (status === 'recording' || status === 'mix_v1') totalCompletedValue += 0.5;
+          else if (status === 'mix_v2') totalCompletedValue += 0.8;
+        }
       });
     });
-    return Math.round((completed / totalParts) * 100);
+
+    if (totalActiveParts === 0) return 0;
+    return Math.round((totalCompletedValue / totalActiveParts) * 100);
   };
 
   const getStatusLabel = (track: string, status: Status) => {
+    if (status === 'skipped') return '-';
     if (track !== 'mixing') return track.substring(0, 3);
     if (status === 'todo') return 'MIX';
     if (status === 'mix_v1') return 'V.1';
@@ -328,6 +337,7 @@ export default function StudioTracker() {
       case 'recording': return `${base} bg-red-500/10 border-red-500/50 text-red-400 hover:bg-red-500/20`;
       case 'mix_v1': return `${base} bg-yellow-500/10 border-yellow-500/50 text-yellow-400`;
       case 'mix_v2': return `${base} bg-orange-500/10 border-orange-500/50 text-orange-400`;
+      case 'skipped': return `${base} bg-[#0a0a0a] border-slate-800 text-slate-700 opacity-50`;
       default: return `${base} bg-[#252525] border-[#333] text-slate-500 hover:border-slate-500 hover:text-slate-300`;
     }
   };
@@ -417,9 +427,11 @@ export default function StudioTracker() {
 
         {/* SONG LIST */}
         {songs.map((song) => {
-          const partsDone = Object.values(song.parts).filter(p => p === 'done' || p === 'master').length;
-          const totalParts = Object.values(song.parts).length;
-          const percent = Math.round((partsDone/totalParts)*100);
+          // Progress calculation per song (excluding skipped)
+          const activeParts = Object.values(song.parts).filter(p => p !== 'skipped');
+          const partsDone = activeParts.filter(p => p === 'done' || p === 'master').length;
+          const totalActive = activeParts.length;
+          const percent = totalActive > 0 ? Math.round((partsDone/totalActive)*100) : 0;
 
           return (
             <div key={song.id} className="bg-[#181818] rounded border border-[#252525] shadow-lg transition-all hover:border-[#333]">
@@ -476,7 +488,7 @@ export default function StudioTracker() {
 
               {!song.isCollapsed && (
                 <div className="px-3 pb-3 sm:px-4 sm:pb-4 border-t border-[#222] pt-4 animate-in slide-in-from-top-2">
-                  <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 mb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
                     {TRACKS.map((track) => {
                       const Icon = track.icon;
                       const status = song.parts[track.key];
@@ -488,8 +500,8 @@ export default function StudioTracker() {
                           className={getButtonClass(status)}
                         >
                           <div className="flex items-center justify-between w-full mb-1"><LedLight status={status} /></div>
-                          <Icon className="w-4 h-4 mb-2 opacity-80" />
-                          <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
+                          <Icon className={`w-4 h-4 mb-2 ${status === 'skipped' ? 'opacity-20' : 'opacity-80'}`} />
+                          <span className={`text-[10px] font-black uppercase tracking-widest ${status === 'skipped' && 'line-through decoration-slate-600'}`}>{label}</span>
                           <span className="text-[8px] font-bold text-slate-600 uppercase mt-1">{track.label}</span>
                         </button>
                       );
