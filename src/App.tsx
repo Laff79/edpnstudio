@@ -2,8 +2,34 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Trash2, Guitar, Drum, Music2, Headphones, Activity, User, 
   Clock, FileText, Coffee, Share2, AlignLeft, Sparkles, X, Power,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, Wifi, WifiOff
 } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, User as FirebaseUser 
+} from 'firebase/auth';
+import { 
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc, getDoc 
+} from 'firebase/firestore';
+
+// --- FIREBASE SETUP ---
+// Nå er dine ekte nøkler lagt inn her:
+const firebaseConfig = {
+  apiKey: "AIzaSyCl2o4FtwSfqgoEZiVMQC-VW8cxLw5JVxM",
+  authDomain: "edpnstudio.firebaseapp.com",
+  projectId: "edpnstudio",
+  storageBucket: "edpnstudio.firebasestorage.app",
+  messagingSenderId: "711525242568",
+  appId: "1:711525242568:web:882d454c26efbb6386b7fd",
+  measurementId: "G-W4JJYE7CLZ"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Vi bruker en fast ID for produksjon slik at alle ser samme data
+const appId = "edpn-production"; 
 
 // --- TYPES ---
 type Status = 'todo' | 'recording' | 'done' | 'mix_v1' | 'mix_v2' | 'master';
@@ -60,26 +86,17 @@ const DEFAULT_PARTS: SongParts = {
 };
 
 const STRATEGIES = [
-  "Less is more.",
-  "Hva er fokuset i låta?",
-  "Ta en pause. Hør med friske ører.",
-  "Fjern, ikke legg til.",
-  "Er tempoet riktig?",
-  "Gjør det enklere.",
-  "Stol på prosessen.",
-  "Tenk dynamikk.",
-  "Hva ville Rick Rubin gjort?",
-  "Kill your darlings."
+  "Less is more.", "Hva er fokuset?", "Ta en pause.", "Fjern, ikke legg til.",
+  "Er tempoet riktig?", "Gjør det enklere.", "Stol på prosessen.", 
+  "Tenk dynamikk.", "Hva ville Rick Rubin gjort?", "Kill your darlings."
 ];
 
 // --- COMPONENTS ---
 
 const DigitalDisplay = ({ value, onChange, placeholder, isCollapsed }: { value: string, onChange: (val: string) => void, placeholder: string, isCollapsed: boolean }) => (
   <div className={`relative group bg-black border border-slate-800 rounded flex items-center overflow-hidden transition-all ${isCollapsed ? 'h-10' : 'h-14'}`}>
-    {/* LCD Glow Effect */}
     <div className="absolute inset-0 bg-cyan-900/5 pointer-events-none"></div>
     <div className="absolute left-0 w-1 h-full bg-cyan-600"></div>
-    
     <input 
       className={`relative z-10 w-full bg-transparent border-none focus:ring-0 px-4 text-cyan-50 font-mono font-bold tracking-wider placeholder:text-slate-700 transition-all ${isCollapsed ? 'text-lg' : 'text-xl sm:text-2xl'}`}
       value={value}
@@ -92,30 +109,24 @@ const DigitalDisplay = ({ value, onChange, placeholder, isCollapsed }: { value: 
 const LedLight = ({ status }: { status: Status }) => {
   let colorClass = 'bg-slate-800';
   let shadowClass = '';
-  
   if (status === 'done' || status === 'master') {
-    colorClass = 'bg-cyan-400';
-    shadowClass = 'shadow-[0_0_8px_rgba(34,211,238,0.8)]';
+    colorClass = 'bg-cyan-400'; shadowClass = 'shadow-[0_0_8px_rgba(34,211,238,0.8)]';
   } else if (status === 'recording') {
-    colorClass = 'bg-red-500 animate-pulse';
-    shadowClass = 'shadow-[0_0_8px_rgba(239,68,68,0.8)]';
+    colorClass = 'bg-red-500 animate-pulse'; shadowClass = 'shadow-[0_0_8px_rgba(239,68,68,0.8)]';
   } else if (status === 'mix_v1') {
-    colorClass = 'bg-yellow-400';
-    shadowClass = 'shadow-[0_0_8px_rgba(250,204,21,0.6)]';
+    colorClass = 'bg-yellow-400'; shadowClass = 'shadow-[0_0_8px_rgba(250,204,21,0.6)]';
   } else if (status === 'mix_v2') {
-    colorClass = 'bg-orange-500';
-    shadowClass = 'shadow-[0_0_8px_rgba(249,115,22,0.6)]';
+    colorClass = 'bg-orange-500'; shadowClass = 'shadow-[0_0_8px_rgba(249,115,22,0.6)]';
   }
-
   return <div className={`w-1.5 h-1.5 rounded-full ${colorClass} ${shadowClass} transition-all duration-300`}></div>;
 };
 
 // --- MAIN APP ---
 export default function StudioTracker() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
   const [consumption, setConsumption] = useState<Consumption>({ coffee: 0, snus: 0 });
   const [newSongTitle, setNewSongTitle] = useState('');
-  const [isLoaded, setIsLoaded] = useState(false);
   const [expandedSong, setExpandedSong] = useState<string | null>(null);
   const [expandedType, setExpandedType] = useState<'notes' | 'lyrics' | null>(null);
   const [recordingMode, setRecordingMode] = useState(false);
@@ -123,102 +134,147 @@ export default function StudioTracker() {
   const [oracleMsg, setOracleMsg] = useState<string | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
 
+  // 1. AUTHENTICATION
+  useEffect(() => {
+    // Enkel anonym innlogging for produksjon
+    signInAnonymously(auth).catch((error) => {
+      console.error("Auth failed:", error);
+    });
+    
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. DATA SYNC - SONGS
+  useEffect(() => {
+    if (!user) return;
+    // Rule 1: Correct Path
+    const songsQuery = collection(db, 'artifacts', appId, 'public', 'data', 'songs');
+    
+    // Rule 2: Simple Query
+    const unsubscribe = onSnapshot(songsQuery, (snapshot) => {
+      const loadedSongs: Song[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Song));
+      
+      // Client-side sort (Rule 2 compliancy)
+      loadedSongs.sort((a, b) => a.title.localeCompare(b.title));
+      setSongs(loadedSongs);
+    }, (error) => {
+      console.error("Sync error songs:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // 3. DATA SYNC - CONSUMPTION
+  useEffect(() => {
+    if (!user) return;
+    const consumRef = doc(db, 'artifacts', appId, 'public', 'data', 'consumption', 'global_stats');
+    
+    const unsubscribe = onSnapshot(consumRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setConsumption(docSnap.data() as Consumption);
+      } else {
+        // Create default if missing
+        setDoc(consumRef, { coffee: 0, snus: 0 });
+      }
+    }, (error) => {
+      console.error("Sync error consumption:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
   // Timer Effect
   useEffect(() => {
     const timer = setInterval(() => setSessionTime(t => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // --- ACTIONS (FIRESTORE) ---
+
+  const addSong = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSongTitle.trim() || !user) return;
+    
+    const newSong: Omit<Song, 'id'> = {
+      title: newSongTitle,
+      bpm: '', key: '', notes: '', lyrics: '', 
+      isCollapsed: false, 
+      parts: { ...DEFAULT_PARTS },
+    };
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'songs'), newSong);
+      setNewSongTitle('');
+    } catch (e) {
+      console.error("Error adding song:", e);
+    }
+  };
+
+  const deleteSong = async (id: string) => {
+    if (!user || !window.confirm('Slette dette sporet fra databasen?')) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'songs', id));
+    } catch (e) {
+      console.error("Error deleting song:", e);
+    }
+  };
+
+  const updateSongField = async (id: string, field: keyof Song, value: any) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'songs', id), {
+        [field]: value
+      });
+    } catch (e) { console.error("Update error:", e); }
+  };
+
+  const updateSongPart = async (id: string, parts: SongParts) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'songs', id), {
+        parts: parts
+      });
+    } catch (e) { console.error("Part update error:", e); }
+  };
+
+  const updateConsumption = async (type: 'coffee' | 'snus') => {
+    if (!user) return;
+    const newVal = consumption[type] + 1;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'consumption', 'global_stats'), {
+        [type]: newVal
+      });
+    } catch (e) { console.error("Consumption error:", e); }
+  };
+
+  // Logic
+  const cycleStatus = (song: Song, part: string) => {
+    const current = song.parts[part] || 'todo';
+    let next: Status = 'todo';
+    
+    if (part === 'mixing') {
+       if (current === 'todo') next = 'mix_v1';
+       else if (current === 'mix_v1') next = 'mix_v2';
+       else if (current === 'mix_v2') next = 'master'; 
+       else if (current === 'master') next = 'todo';
+       else next = 'todo';
+    } else {
+      if (current === 'todo') next = 'recording';
+      else if (current === 'recording') next = 'done';
+      else next = 'todo';
+    }
+
+    updateSongPart(song.id, { ...song.parts, [part]: next });
+  };
+
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}`;
-  };
-
-  // Load Data
-  useEffect(() => {
-    const savedSongs = localStorage.getItem('edpn-songs-v8'); 
-    const savedConsum = localStorage.getItem('edpn-consumption-v8');
-    
-    if (savedSongs) {
-      try {
-        const parsed = JSON.parse(savedSongs);
-        setSongs(parsed.map((s: any) => ({
-          ...s,
-          isCollapsed: s.isCollapsed || false, // Add default for migration
-          parts: { ...DEFAULT_PARTS, ...s.parts }
-        })));
-      } catch (e) { console.error(e); }
-    } else {
-      setSongs([{
-        id: '1',
-        title: 'Levd liv',
-        bpm: '124',
-        key: 'Hm',
-        notes: '',
-        lyrics: '',
-        isCollapsed: false,
-        parts: { ...DEFAULT_PARTS, drums: 'done', bass: 'done', guitars: 'recording' }
-      }]);
-    }
-    if (savedConsum) {
-      try { setConsumption(JSON.parse(savedConsum)); } catch (e) { console.error(e); }
-    }
-    setIsLoaded(true);
-  }, []);
-
-  // Save Data
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('edpn-songs-v8', JSON.stringify(songs));
-      localStorage.setItem('edpn-consumption-v8', JSON.stringify(consumption));
-    }
-  }, [songs, consumption, isLoaded]);
-
-  // Actions
-  const addSong = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newSongTitle.trim()) return;
-    setSongs([...songs, {
-      id: crypto.randomUUID(),
-      title: newSongTitle,
-      bpm: '', key: '', notes: '', lyrics: '', isCollapsed: false, parts: { ...DEFAULT_PARTS },
-    }]);
-    setNewSongTitle('');
-  };
-
-  const deleteSong = (id: string) => {
-    if (window.confirm('Er du sikker på at du vil slette sporet?')) setSongs(songs.filter(s => s.id !== id));
-  };
-
-  const toggleCollapse = (id: string) => {
-    setSongs(songs.map(s => s.id === id ? { ...s, isCollapsed: !s.isCollapsed } : s));
-  };
-
-  const updateSongField = (id: string, field: keyof Song, value: string) => {
-    setSongs(songs.map(s => s.id === id ? { ...s, [field]: value } : s));
-  };
-
-  const cycleStatus = (songId: string, part: string) => {
-    setSongs(songs.map(song => {
-      if (song.id !== songId) return song;
-      const current = song.parts[part] || 'todo';
-      let next: Status = 'todo';
-      
-      if (part === 'mixing') {
-         if (current === 'todo') next = 'mix_v1';
-         else if (current === 'mix_v1') next = 'mix_v2';
-         else if (current === 'mix_v2') next = 'master'; 
-         else if (current === 'master') next = 'todo';
-         else next = 'todo';
-      } else {
-        if (current === 'todo') next = 'recording';
-        else if (current === 'recording') next = 'done';
-        else next = 'todo';
-      }
-
-      return { ...song, parts: { ...song.parts, [part]: next } };
-    }));
   };
 
   const askOracle = () => {
@@ -279,7 +335,7 @@ export default function StudioTracker() {
   return (
     <div className={`min-h-screen font-sans pb-40 transition-colors duration-1000 ${recordingMode ? 'bg-[#1a0505]' : 'bg-[#121212]'}`}>
       
-      {/* --- RECORDING OVERLAY --- */}
+      {/* RECORDING OVERLAY */}
       <div className={`fixed inset-0 pointer-events-none z-[100] transition-opacity duration-500 ${recordingMode ? 'opacity-100' : 'opacity-0'}`}>
           <div className="absolute top-0 w-full h-1 bg-red-500 shadow-[0_0_50px_red]"></div>
           <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/90 text-white font-bold px-4 py-1.5 rounded-full shadow-[0_0_20px_rgba(220,38,38,0.5)] animate-pulse">
@@ -287,7 +343,7 @@ export default function StudioTracker() {
           </div>
       </div>
 
-      {/* --- ORACLE --- */}
+      {/* ORACLE */}
       {oracleMsg && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur animate-in fade-in" onClick={() => setOracleMsg(null)}>
           <div className="bg-[#1a1a1a] border border-cyan-500/50 p-8 rounded-xl max-w-md text-center shadow-[0_0_50px_rgba(6,182,212,0.2)]">
@@ -297,12 +353,11 @@ export default function StudioTracker() {
         </div>
       )}
 
-      {/* --- HEADER --- */}
+      {/* HEADER */}
       <header className="sticky top-0 z-50 bg-[#121212]/95 backdrop-blur-xl border-b border-[#252525]">
         <div className="max-w-7xl mx-auto px-2 sm:px-4 py-3">
           <div className="flex justify-between items-center gap-2">
             
-            {/* BRANDING */}
             <div className="flex flex-col">
               <h1 className="text-lg sm:text-xl font-black text-slate-200 tracking-[0.2em] uppercase flex items-center gap-2">
                 <Activity className="text-cyan-500 w-5 h-5" /> EDPN
@@ -311,10 +366,11 @@ export default function StudioTracker() {
                 <span>DELTA STUDIO</span>
                 <span className="text-slate-700">|</span>
                 <span className="text-red-500 flex items-center gap-1"><Clock className="w-3 h-3" /> {formatTime(sessionTime)}</span>
+                <span className="text-slate-700">|</span>
+                {user ? <span className="flex items-center gap-1 text-green-500"><Wifi className="w-3 h-3"/> ONLINE</span> : <span className="flex items-center gap-1 text-red-500"><WifiOff className="w-3 h-3"/> OFFLINE</span>}
               </div>
             </div>
 
-            {/* PROGRESS BAR (Digital) */}
             <div className="flex-1 max-w-md mx-4 hidden sm:block">
               <div className="flex justify-between text-[10px] font-mono text-cyan-500 mb-1">
                 <span>PROGRESS</span>
@@ -325,7 +381,6 @@ export default function StudioTracker() {
               </div>
             </div>
 
-            {/* CONTROLS */}
             <div className="flex items-center gap-3">
                <button onClick={askOracle} className="p-2 rounded-full bg-[#1a1a1a] border border-[#333] hover:border-cyan-500/50 hover:text-cyan-400 text-slate-500 transition-colors" title="Strategy">
                 <Sparkles className="w-4 h-4" />
@@ -341,16 +396,16 @@ export default function StudioTracker() {
         </div>
       </header>
 
-      {/* --- CONTENT --- */}
+      {/* CONTENT */}
       <main className="max-w-7xl mx-auto px-2 sm:px-4 py-6 space-y-4">
         
-        {/* CONSUMPTION BAR */}
+        {/* CONSUMPTION */}
         <div className="flex justify-end gap-2 mb-6">
-           <button onClick={() => setConsumption(c => ({...c, coffee: c.coffee + 1}))} className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1a1a1a] border border-[#252525] hover:border-orange-900/50 hover:bg-[#251a15] transition-colors group">
+           <button onClick={() => updateConsumption('coffee')} className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1a1a1a] border border-[#252525] hover:border-orange-900/50 hover:bg-[#251a15] transition-colors group">
              <Coffee className="w-3.5 h-3.5 text-orange-400/70 group-hover:text-orange-400" />
              <span className="text-xs font-mono font-bold text-slate-400">{consumption.coffee}</span>
            </button>
-           <button onClick={() => setConsumption(c => ({...c, snus: c.snus + 1}))} className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1a1a1a] border border-[#252525] hover:border-blue-900/50 hover:bg-[#151a25] transition-colors group">
+           <button onClick={() => updateConsumption('snus')} className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1a1a1a] border border-[#252525] hover:border-blue-900/50 hover:bg-[#151a25] transition-colors group">
              <div className="w-3.5 h-3.5 rounded-full border border-slate-500 group-hover:border-slate-300"></div>
              <span className="text-xs font-mono font-bold text-slate-400">{consumption.snus}</span>
            </button>
@@ -360,6 +415,7 @@ export default function StudioTracker() {
            </button>
         </div>
 
+        {/* SONG LIST */}
         {songs.map((song) => {
           const partsDone = Object.values(song.parts).filter(p => p === 'done' || p === 'master').length;
           const totalParts = Object.values(song.parts).length;
@@ -368,18 +424,14 @@ export default function StudioTracker() {
           return (
             <div key={song.id} className="bg-[#181818] rounded border border-[#252525] shadow-lg transition-all hover:border-[#333]">
               
-              {/* TOP STRIP (Always visible) */}
               <div className="p-3 sm:p-4 flex items-center justify-between gap-4">
-                
-                {/* Expand Toggle */}
                 <button 
-                  onClick={() => toggleCollapse(song.id)}
+                  onClick={() => updateSongField(song.id, 'isCollapsed', !song.isCollapsed)}
                   className="p-1.5 rounded hover:bg-[#222] text-slate-600 hover:text-slate-300 transition-colors"
                 >
                   {song.isCollapsed ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
                 </button>
 
-                {/* Input / Title */}
                 <div className="flex-1">
                   <DigitalDisplay 
                     value={song.title} 
@@ -389,7 +441,6 @@ export default function StudioTracker() {
                   />
                 </div>
 
-                {/* Mini Stats (Visible when collapsed) */}
                 {song.isCollapsed && (
                   <div className="hidden sm:flex items-center gap-4 text-xs font-mono text-slate-500">
                     <span className={percent === 100 ? 'text-cyan-400' : ''}>{percent}%</span>
@@ -399,7 +450,6 @@ export default function StudioTracker() {
                   </div>
                 )}
                 
-                {/* Meta Inputs (Visible when expanded) */}
                 {!song.isCollapsed && (
                   <div className="hidden lg:flex gap-2">
                     <div className="flex flex-col bg-[#111] px-3 py-1 rounded border border-[#222]">
@@ -424,26 +474,20 @@ export default function StudioTracker() {
                 )}
               </div>
 
-              {/* EXPANDED CONTENT */}
               {!song.isCollapsed && (
                 <div className="px-3 pb-3 sm:px-4 sm:pb-4 border-t border-[#222] pt-4 animate-in slide-in-from-top-2">
-                  
-                  {/* BUTTON GRID */}
                   <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 mb-4">
                     {TRACKS.map((track) => {
                       const Icon = track.icon;
                       const status = song.parts[track.key];
                       const label = getStatusLabel(track.key, status);
-                      
                       return (
                         <button
                           key={track.key}
-                          onClick={() => cycleStatus(song.id, track.key)}
+                          onClick={() => cycleStatus(song, track.key)}
                           className={getButtonClass(status)}
                         >
-                          <div className="flex items-center justify-between w-full mb-1">
-                             <LedLight status={status} />
-                          </div>
+                          <div className="flex items-center justify-between w-full mb-1"><LedLight status={status} /></div>
                           <Icon className="w-4 h-4 mb-2 opacity-80" />
                           <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
                           <span className="text-[8px] font-bold text-slate-600 uppercase mt-1">{track.label}</span>
@@ -452,7 +496,6 @@ export default function StudioTracker() {
                     })}
                   </div>
 
-                  {/* TOOLS */}
                   <div className="flex items-center justify-between pt-2 border-t border-[#222]">
                     <div className="flex gap-2">
                        <button onClick={() => { setExpandedSong(expandedSong === song.id ? null : song.id); setExpandedType('lyrics'); }} className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold uppercase transition-all ${song.lyrics ? 'text-cyan-400 bg-cyan-900/10' : 'text-slate-500 hover:text-slate-300'}`}>
@@ -462,14 +505,11 @@ export default function StudioTracker() {
                          <FileText className="w-3 h-3" /> Notater
                        </button>
                     </div>
-                    <button onClick={() => deleteSong(song.id)} className="text-slate-700 hover:text-red-500 transition-colors p-2">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => deleteSong(song.id)} className="text-slate-700 hover:text-red-500 transition-colors p-2"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
               )}
 
-              {/* DRAWER (Lyrics/Notes) */}
               {expandedSong === song.id && (
                 <div className="bg-[#111] border-t border-[#252525] p-4">
                    <div className="flex justify-between items-center mb-3">
@@ -488,7 +528,7 @@ export default function StudioTracker() {
           );
         })}
 
-        {/* ADD SONG */}
+        {/* ADD SONG FORM */}
         <form onSubmit={addSong} className="mt-8">
           <div className="relative group max-w-md mx-auto">
             <input
@@ -505,7 +545,7 @@ export default function StudioTracker() {
         </form>
 
         <div className="text-center pt-8 pb-4 opacity-30">
-            <p className="text-[10px] font-mono tracking-[0.3em] text-slate-500">DELTA STUDIO V7.0</p>
+            <p className="text-[10px] font-mono tracking-[0.3em] text-slate-500">DELTA STUDIO CLOUD SYNC</p>
         </div>
 
       </main>
