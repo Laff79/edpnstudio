@@ -363,7 +363,6 @@ export default function StudioTracker() {
         {songs.map((song) => {
           const partsDone = Object.values(song.parts).filter(p => p === 'done' || p === 'master').length;
           const totalParts = Object.values(song.parts).length;
-          const isComplete = partsDone === totalParts;
           const percent = Math.round((partsDone/totalParts)*100);
 
           return (
