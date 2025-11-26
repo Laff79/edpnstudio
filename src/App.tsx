@@ -9,7 +9,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged, User as FirebaseUser 
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc, getDoc 
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc 
 } from 'firebase/firestore';
 
 // --- FIREBASE SETUP ---
@@ -136,8 +136,8 @@ export default function StudioTracker() {
 
   // 1. AUTHENTICATION
   useEffect(() => {
-    // Enkel anonym innlogging for produksjon
-    signInAnonymously(auth).catch((error) => {
+    // Vi logger inn anonymt direkte siden vi bruker din egen produksjons-database
+    signInAnonymously(auth).catch((error: any) => {
       console.error("Auth failed:", error);
     });
     
@@ -152,8 +152,8 @@ export default function StudioTracker() {
     const songsQuery = collection(db, 'artifacts', appId, 'public', 'data', 'songs');
     
     // Rule 2: Simple Query
-    const unsubscribe = onSnapshot(songsQuery, (snapshot) => {
-      const loadedSongs: Song[] = snapshot.docs.map(doc => ({
+    const unsubscribe = onSnapshot(songsQuery, (snapshot: any) => {
+      const loadedSongs: Song[] = snapshot.docs.map((doc: any) => ({
         id: doc.id,
         ...doc.data()
       } as Song));
@@ -161,7 +161,7 @@ export default function StudioTracker() {
       // Client-side sort (Rule 2 compliancy)
       loadedSongs.sort((a, b) => a.title.localeCompare(b.title));
       setSongs(loadedSongs);
-    }, (error) => {
+    }, (error: any) => {
       console.error("Sync error songs:", error);
     });
 
@@ -173,14 +173,14 @@ export default function StudioTracker() {
     if (!user) return;
     const consumRef = doc(db, 'artifacts', appId, 'public', 'data', 'consumption', 'global_stats');
     
-    const unsubscribe = onSnapshot(consumRef, (docSnap) => {
+    const unsubscribe = onSnapshot(consumRef, (docSnap: any) => {
       if (docSnap.exists()) {
         setConsumption(docSnap.data() as Consumption);
       } else {
         // Create default if missing
         setDoc(consumRef, { coffee: 0, snus: 0 });
       }
-    }, (error) => {
+    }, (error: any) => {
       console.error("Sync error consumption:", error);
     });
 
